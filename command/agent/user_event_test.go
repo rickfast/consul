@@ -186,3 +186,69 @@ func TestFireReceiveEvent(t *testing.T) {
 		t.Fatalf("bad: %#v", last)
 	}
 }
+
+func TestUserEventToken(t *testing.T) {
+	conf := nextConfig()
+
+	// Enable ACLs
+	conf.ACLDatacenter = "dc1"
+	conf.ACLMasterToken = "root"
+	conf.ACLDownPolicy = "deny"
+	conf.ACLDefaultPolicy = "deny"
+
+	dir, agent := makeAgent(t, conf)
+	defer os.RemoveAll(dir)
+	defer agent.Shutdown()
+
+	testutil.WaitForLeader(t, agent.RPC, "dc1")
+
+	// Create an ACL token
+	args := structs.ACLRequest{
+		Datacenter: "dc1",
+		Op:         structs.ACLSet,
+		ACL: structs.ACL{
+			Name:  "User token",
+			Type:  structs.ACLTypeClient,
+			Rules: testEventPolicy,
+		},
+		WriteRequest: structs.WriteRequest{Token: "root"},
+	}
+	var token string
+	if err := agent.RPC("ACL.Apply", &args, &token); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	type tcase struct {
+		name   string
+		expect bool
+	}
+	cases := []tcase{
+		{"foo", false},
+		{"bar", false},
+		{"baz", true},
+		{"zip", false},
+	}
+	for _, c := range cases {
+		event := &UserEvent{Name: c.name, Token: token}
+		err := agent.UserEvent("dc1", event)
+		allowed := false
+		if err == nil || err.Error() != permissionDenied {
+			allowed = true
+		}
+		if allowed != c.expect {
+			t.Fatalf("bad: %#v result: %v", c, allowed)
+		}
+	}
+}
+
+const testEventPolicy = `
+event "foo" {
+	policy = "deny"
+}
+event "bar" {
+	policy = "read"
+}
+event "baz" {
+	policy = "write"
+}
+`
