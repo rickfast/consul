@@ -14,7 +14,7 @@ const (
 	ServicePolicyRead  = "read"
 	ServicePolicyWrite = "write"
 	EventPolicyRead    = "read"
-	EventPolicyWrite   = "write"
+	EventPolicyFire    = "fire"
 	EventPolicyDeny    = "deny"
 	ExecPolicyAllow    = "allow"
 	ExecPolicyDeny     = "deny"
@@ -111,7 +111,7 @@ func Parse(rules string) (*Policy, error) {
 	for _, ep := range p.Events {
 		switch ep.Policy {
 		case EventPolicyRead:
-		case EventPolicyWrite:
+		case EventPolicyFire:
 		case EventPolicyDeny:
 		default:
 			return nil, fmt.Errorf("Invalid event policy: %#v", ep)

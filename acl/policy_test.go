@@ -29,7 +29,7 @@ event "" {
 	policy = "read"
 }
 event "foo" {
-	policy = "write"
+	policy = "fire"
 }
 event "bar" {
 	policy = "deny"
@@ -77,7 +77,7 @@ exec "uptime" {
 			},
 			&EventPolicy{
 				Event:  "foo",
-				Policy: EventPolicyWrite,
+				Policy: EventPolicyFire,
 			},
 			&EventPolicy{
 				Event:  "bar",
@@ -135,7 +135,7 @@ func TestParse_JSON(t *testing.T) {
 			"policy": "read"
 		},
 		"foo": {
-			"policy": "write"
+			"policy": "fire"
 		},
 		"bar": {
 			"policy": "deny"
@@ -186,7 +186,7 @@ func TestParse_JSON(t *testing.T) {
 			},
 			&EventPolicy{
 				Event:  "foo",
-				Policy: EventPolicyWrite,
+				Policy: EventPolicyFire,
 			},
 			&EventPolicy{
 				Event:  "bar",

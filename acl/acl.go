@@ -55,8 +55,8 @@ type ACL interface {
 	// EventRead determines if a specific event can be queried.
 	EventRead(string) bool
 
-	// EventWrite determines if a specific event may be fired.
-	EventWrite(string) bool
+	// EventFire determines if a specific event may be fired.
+	EventFire(string) bool
 
 	// Exec determines if the command is allowed to be executed.
 	Exec(string) bool
@@ -100,7 +100,7 @@ func (s *StaticACL) EventRead(string) bool {
 	return s.defaultAllow
 }
 
-func (s *StaticACL) EventWrite(string) bool {
+func (s *StaticACL) EventFire(string) bool {
 	return s.defaultAllow
 }
 
@@ -314,7 +314,7 @@ func (p *PolicyACL) EventRead(name string) bool {
 		switch rule {
 		case EventPolicyRead:
 			return true
-		case EventPolicyWrite:
+		case EventPolicyFire:
 			return true
 		default:
 			return false
@@ -325,16 +325,16 @@ func (p *PolicyACL) EventRead(name string) bool {
 	return p.parent.EventRead(name)
 }
 
-// EventWrite is used to determine if new events can be created
+// EventFire is used to determine if new events can be created
 // (fired) by the policy.
-func (p *PolicyACL) EventWrite(name string) bool {
+func (p *PolicyACL) EventFire(name string) bool {
 	// Longest-prefix match event names
 	if _, rule, ok := p.eventRules.LongestPrefix(name); ok {
-		return rule == EventPolicyWrite
+		return rule == EventPolicyFire
 	}
 
 	// No match, use parent
-	return p.parent.EventWrite(name)
+	return p.parent.EventFire(name)
 }
 
 // Exec determines if running a remote command is allowed

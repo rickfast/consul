@@ -75,10 +75,10 @@ func TestStaticACL(t *testing.T) {
 	if none.EventRead("") {
 		t.Fatalf("should not allow")
 	}
-	if none.EventWrite("foobar") {
+	if none.EventFire("foobar") {
 		t.Fatalf("should not allow")
 	}
-	if none.EventWrite("") {
+	if none.EventFire("") {
 		t.Fatalf("should not allow")
 	}
 	if none.Exec("foobar") {
@@ -163,7 +163,7 @@ func TestPolicyACL(t *testing.T) {
 			},
 			&EventPolicy{
 				Event:  "foo",
-				Policy: EventPolicyWrite,
+				Policy: EventPolicyFire,
 			},
 			&EventPolicy{
 				Event:  "bar",
@@ -253,7 +253,7 @@ func TestPolicyACL(t *testing.T) {
 		if c.read != acl.EventRead(c.inp) {
 			t.Fatalf("Event fail: %#v", c)
 		}
-		if c.write != acl.EventWrite(c.inp) {
+		if c.write != acl.EventFire(c.inp) {
 			t.Fatalf("Event fail: %#v", c)
 		}
 	}
