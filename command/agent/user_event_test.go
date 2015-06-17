@@ -162,13 +162,13 @@ func TestFireReceiveEvent(t *testing.T) {
 	agent.state.AddService(srv1, "")
 
 	p1 := &UserEvent{Name: "deploy", ServiceFilter: "web"}
-	err := agent.UserEvent("", p1)
+	err := agent.UserEvent("dc1", "root", p1)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	p2 := &UserEvent{Name: "deploy"}
-	err = agent.UserEvent("", p2)
+	err = agent.UserEvent("dc1", "root", p2)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -229,8 +229,8 @@ func TestUserEventToken(t *testing.T) {
 		{"zip", false},
 	}
 	for _, c := range cases {
-		event := &UserEvent{Name: c.name, Token: token}
-		err := agent.UserEvent("dc1", event)
+		event := &UserEvent{Name: c.name}
+		err := agent.UserEvent("dc1", token, event)
 		allowed := false
 		if err == nil || err.Error() != permissionDenied {
 			allowed = true

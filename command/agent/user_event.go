@@ -36,9 +36,6 @@ type UserEvent struct {
 	// must be provided with ServiceFilter
 	TagFilter string `codec:"tf,omitempty"`
 
-	// Token is used to pass an ACL token to authorize the event.
-	Token string `codec:"t,omitempty"`
-
 	// Version of the user event. Automatically generated.
 	Version int `codec:"v"`
 
@@ -74,7 +71,7 @@ func validateUserEventParams(params *UserEvent) error {
 }
 
 // UserEvent is used to fire an event via the Serf layer on the LAN
-func (a *Agent) UserEvent(dc string, params *UserEvent) error {
+func (a *Agent) UserEvent(dc, token string, params *UserEvent) error {
 	// Validate the params
 	if err := validateUserEventParams(params); err != nil {
 		return err
@@ -96,7 +93,7 @@ func (a *Agent) UserEvent(dc string, params *UserEvent) error {
 	}
 
 	// Pass along the ACL token, if any
-	args.Token = params.Token
+	args.Token = token
 
 	// Any server can process in the remote DC, since the
 	// gossip will take over anyways

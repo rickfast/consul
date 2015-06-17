@@ -54,7 +54,7 @@ func TestEventFire(t *testing.T) {
 func TestEventList(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		p := &UserEvent{Name: "test"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("", "", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
@@ -90,12 +90,12 @@ func TestEventList(t *testing.T) {
 func TestEventList_Filter(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		p := &UserEvent{Name: "test"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("", "", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
 		p = &UserEvent{Name: "foo"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("", "", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
@@ -131,7 +131,7 @@ func TestEventList_Filter(t *testing.T) {
 func TestEventList_Blocking(t *testing.T) {
 	httpTest(t, func(srv *HTTPServer) {
 		p := &UserEvent{Name: "test"}
-		if err := srv.agent.UserEvent("", p); err != nil {
+		if err := srv.agent.UserEvent("", "", p); err != nil {
 			t.Fatalf("err: %v", err)
 		}
 
@@ -159,7 +159,7 @@ func TestEventList_Blocking(t *testing.T) {
 		go func() {
 			time.Sleep(50 * time.Millisecond)
 			p := &UserEvent{Name: "second"}
-			if err := srv.agent.UserEvent("", p); err != nil {
+			if err := srv.agent.UserEvent("", "", p); err != nil {
 				t.Fatalf("err: %v", err)
 			}
 		}()
@@ -202,7 +202,7 @@ func TestEventList_EventBufOrder(t *testing.T) {
 			expected,
 			&UserEvent{Name: "bar"},
 		} {
-			if err := srv.agent.UserEvent("", e); err != nil {
+			if err := srv.agent.UserEvent("", "", e); err != nil {
 				t.Fatalf("err: %v", err)
 			}
 		}
