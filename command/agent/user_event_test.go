@@ -153,6 +153,8 @@ func TestFireReceiveEvent(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer agent.Shutdown()
 
+	testutil.WaitForLeader(t, agent.RPC, "dc1")
+
 	srv1 := &structs.NodeService{
 		ID:      "mysql",
 		Service: "mysql",
@@ -190,10 +192,7 @@ func TestFireReceiveEvent(t *testing.T) {
 func TestUserEventToken(t *testing.T) {
 	conf := nextConfig()
 
-	// Enable ACLs
-	conf.ACLDatacenter = "dc1"
-	conf.ACLMasterToken = "root"
-	conf.ACLDownPolicy = "deny"
+	// Set the default policies to deny
 	conf.ACLDefaultPolicy = "deny"
 
 	dir, agent := makeAgent(t, conf)
