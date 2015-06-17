@@ -126,6 +126,18 @@ func (s *Server) localEvent(event serf.UserEvent) {
 		}
 	case isUserEvent(name):
 		event.Name = rawUserEventName(name)
+
+		// Check the server's local ACL for the event.
+		ok, err := s.checkEventACL(event.Name)
+		if err != nil {
+			s.logger.Printf("[ERR] consul: failed to check ACL for event %q: %s", event.Name, err)
+			return
+		}
+		if !ok {
+			s.logger.Printf("[WARN] consul: local ACL policy denied event: %q", event.Name)
+			return
+		}
+
 		s.logger.Printf("[DEBUG] consul: user event: %s", event.Name)
 
 		// Trigger the callback
@@ -135,6 +147,20 @@ func (s *Server) localEvent(event serf.UserEvent) {
 	default:
 		s.logger.Printf("[WARN] consul: Unhandled local event: %v", event)
 	}
+}
+
+// checkEventACL is used to check if the local server should execute a given
+// event based on its name.
+func (s *Server) checkEventACL(name string) (bool, error) {
+	// Try to get the ACL
+	acl, err := s.resolveToken(s.config.ACLToken)
+	if err != nil {
+		return false, err
+	}
+
+	// Check if we should execute the event
+	fire := acl == nil || acl.EventFire(name)
+	return fire, nil
 }
 
 // nodeJoin is used to handle join events on the both serf clusters

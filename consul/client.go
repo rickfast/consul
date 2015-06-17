@@ -1,6 +1,7 @@
 package consul
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -11,7 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/armon/go-metrics"
+	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/consul/structs"
+	"github.com/hashicorp/golang-lru"
 	"github.com/hashicorp/serf/serf"
 )
 
@@ -62,6 +66,11 @@ type Client struct {
 	// which contains all the DC nodes
 	serf *serf.Serf
 
+	// ACL and policy cache. These are used to maintain a cache of
+	// the ACL policies from server nodes for local enforcement.
+	aclCache       *lru.Cache
+	aclPolicyCache *lru.Cache
+
 	shutdown     bool
 	shutdownCh   chan struct{}
 	shutdownLock sync.Mutex
@@ -106,6 +115,20 @@ func NewClient(config *Config) (*Client, error) {
 		eventCh:    make(chan serf.Event, 256),
 		logger:     logger,
 		shutdownCh: make(chan struct{}),
+	}
+
+	// Initialize the ACL cache
+	c.aclCache, err = lru.New(aclCacheSize)
+	if err != nil {
+		c.Shutdown()
+		return nil, fmt.Errorf("Failed to create the ACL cache: %s", err)
+	}
+
+	// Initialize the policy cache
+	c.aclPolicyCache, err = lru.New(aclCacheSize)
+	if err != nil {
+		c.Shutdown()
+		return nil, fmt.Errorf("Failed to create the policy cache: %s", err)
 	}
 
 	// Start the Serf listeners to prevent a deadlock
@@ -318,6 +341,18 @@ func (c *Client) localEvent(event serf.UserEvent) {
 		}
 	case isUserEvent(name):
 		event.Name = rawUserEventName(name)
+
+		// Check the client's local ACL for the event.
+		ok, err := c.checkEventACL(event.Name)
+		if err != nil {
+			c.logger.Printf("[ERR] consul: failed to check ACL for event %q: %s", event.Name, err)
+			return
+		}
+		if !ok {
+			c.logger.Printf("[WARN] consul: local ACL policy denied event: %q", event.Name)
+			return
+		}
+
 		c.logger.Printf("[DEBUG] consul: user event: %s", event.Name)
 
 		// Trigger the callback
@@ -327,6 +362,20 @@ func (c *Client) localEvent(event serf.UserEvent) {
 	default:
 		c.logger.Printf("[WARN] consul: Unhandled local event: %v", event)
 	}
+}
+
+// checkEventACL is used to check if the local server should execute a given
+// event based on its name.
+func (c *Client) checkEventACL(name string) (bool, error) {
+	// Try to get the ACL
+	acl, err := c.resolveToken(c.config.ACLToken)
+	if err != nil {
+		return false, err
+	}
+
+	// Check if we should execute the event
+	fire := acl == nil || acl.EventFire(name)
+	return fire, nil
 }
 
 // RPC is used to forward an RPC call to a consul server, or fail if no servers
@@ -380,4 +429,128 @@ func (c *Client) Stats() map[string]map[string]string {
 		"runtime":  runtimeStats(),
 	}
 	return stats
+}
+
+// resolveToken is used to resolve an ACL is any is appropriate
+func (c *Client) resolveToken(id string) (acl.ACL, error) {
+	// Check if there is no ACL datacenter (ACL's disabled)
+	authDC := c.config.ACLDatacenter
+	if len(authDC) == 0 {
+		return nil, nil
+	}
+	defer metrics.MeasureSince([]string{"consul", "acl", "resolveToken"}, time.Now())
+
+	// Handle the anonymous token
+	if len(id) == 0 {
+		id = anonymousToken
+	} else if acl.RootACL(id) != nil {
+		return nil, errors.New(rootDenied)
+	}
+
+	// Use our non-authoritative cache
+	return c.lookupACL(id, authDC)
+}
+
+// lookupACL is used to look up an ACL from the authoritative datacenter. Since
+// we are in client mode, we will always need to make a remote query.
+func (c *Client) lookupACL(id, authDC string) (acl.ACL, error) {
+	// Check the cache for the ACL
+	var cached *aclCacheEntry
+	raw, ok := c.aclCache.Get(id)
+	if ok {
+		cached = raw.(*aclCacheEntry)
+	}
+
+	// Check for live cache
+	if cached != nil && time.Now().Before(cached.Expires) {
+		metrics.IncrCounter([]string{"consul", "acl", "cache_hit"}, 1)
+		return cached.ACL, nil
+	} else {
+		metrics.IncrCounter([]string{"consul", "acl", "cache_miss"}, 1)
+	}
+
+	// Attempt to refresh the policy
+	args := structs.ACLPolicyRequest{
+		Datacenter: authDC,
+		ACL:        id,
+	}
+	if cached != nil {
+		args.ETag = cached.ETag
+	}
+	var out structs.ACLPolicy
+	err := c.RPC("ACL.GetPolicy", &args, &out)
+
+	// Handle the happy path
+	if err == nil {
+		return c.useACLPolicy(id, authDC, cached, &out)
+	}
+
+	// Check for not-found
+	if strings.Contains(err.Error(), aclNotFound) {
+		return nil, errors.New(aclNotFound)
+	} else {
+		c.logger.Printf("[ERR] consul.acl: Failed to get policy for '%s': %v", id, err)
+	}
+
+	// Unable to refresh, apply the down policy
+	switch c.config.ACLDownPolicy {
+	case "allow":
+		return acl.AllowAll(), nil
+	case "extend-cache":
+		if cached != nil {
+			return cached.ACL, nil
+		}
+		fallthrough
+	default:
+		return acl.DenyAll(), nil
+	}
+}
+
+// useACLPolicy handles an ACLPolicy response
+func (c *Client) useACLPolicy(id, authDC string, cached *aclCacheEntry, p *structs.ACLPolicy) (acl.ACL, error) {
+	// Check if we can used the cached policy
+	if cached != nil && cached.ETag == p.ETag {
+		if p.TTL > 0 {
+			cached.Expires = time.Now().Add(p.TTL)
+		}
+		return cached.ACL, nil
+	}
+
+	// Check for a cached compiled policy
+	var compiled acl.ACL
+	raw, ok := c.aclPolicyCache.Get(p.ETag)
+	if ok {
+		compiled = raw.(acl.ACL)
+	} else {
+		// Resolve the parent policy
+		parent := acl.RootACL(p.Parent)
+		if parent == nil {
+			var err error
+			parent, err = c.lookupACL(p.Parent, authDC)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Compile the ACL
+		acl, err := acl.New(parent, p.Policy)
+		if err != nil {
+			return nil, err
+		}
+
+		// Cache the policy
+		c.aclPolicyCache.Add(p.ETag, acl)
+		compiled = acl
+	}
+
+	// Cache the ACL
+	cached = &aclCacheEntry{
+		ACL:  compiled,
+		ETag: p.ETag,
+	}
+	if p.TTL > 0 {
+		cached.Expires = time.Now().Add(p.TTL)
+	}
+	c.aclCache.Add(id, cached)
+	return compiled, nil
 }
