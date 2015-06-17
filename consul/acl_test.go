@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/consul/acl"
 	"github.com/hashicorp/consul/consul/structs"
@@ -876,6 +877,121 @@ func TestACL_unhandledFilterType(t *testing.T) {
 
 	// Pass an unhandled type into the ACL filter.
 	srv.filterACL(token, &structs.HealthCheck{})
+}
+
+func TestACL_NonAuthority_cache(t *testing.T) {
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.ACLToken = "root"
+		c.ACLMasterToken = "root"
+		c.ACLDatacenter = "dc1"
+		c.ACLDownPolicy = "deny"
+		c.ACLDefaultPolicy = "deny"
+		c.ACLTTL = 100 * time.Millisecond
+	})
+	defer os.RemoveAll(dir1)
+	defer s1.Shutdown()
+
+	client := rpcClient(t, s1)
+	defer client.Close()
+
+	testutil.WaitForLeader(t, client.Call, "dc1")
+
+	dir2, s2 := testServerWithConfig(t, func(c *Config) {
+		c.ACLDatacenter = "dc1"
+		c.Bootstrap = false
+	})
+	defer os.RemoveAll(dir2)
+	defer s2.Shutdown()
+
+	// Try to join
+	addr := fmt.Sprintf("127.0.0.1:%d",
+		s1.config.SerfLANConfig.MemberlistConfig.BindPort)
+	if _, err := s2.JoinLAN([]string{addr}); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	testutil.WaitForResult(func() (bool, error) {
+		p1, _ := s1.raftPeers.Peers()
+		return len(p1) == 2, errors.New(fmt.Sprintf("%v", p1))
+	}, func(err error) {
+		t.Fatalf("should have 2 peers: %v", err)
+	})
+
+	// Create an ACL token
+	arg1 := structs.ACLRequest{
+		Datacenter: "dc1",
+		Op:         structs.ACLSet,
+		ACL: structs.ACL{
+			Name:  "User token",
+			Type:  structs.ACLTypeClient,
+			Rules: `key "" { policy = "deny" }`,
+		},
+		WriteRequest: structs.WriteRequest{Token: "root"},
+	}
+	var id string
+	if err := client.Call("ACL.Apply", &arg1, &id); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Resolve the token
+	acl, err := s2.aclCache.lookupACL(id, "dc1")
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Caches should be populated
+	if l := s2.aclCache.aclCache.Len(); l != 1 {
+		t.Fatalf("bad: %d", l)
+	}
+	if l := s2.aclCache.aclPolicyCache.Len(); l != 1 {
+		t.Fatalf("bad: %d", l)
+	}
+
+	// ACL should deny all KV
+	if acl.KeyRead("") {
+		t.Fatalf("should deny")
+	}
+
+	// Update the policy to allow
+	arg2 := structs.ACLRequest{
+		Datacenter: "dc1",
+		Op:         structs.ACLSet,
+		ACL: structs.ACL{
+			ID:    id,
+			Name:  "User token",
+			Type:  structs.ACLTypeClient,
+			Rules: `key "" { policy = "read" }`,
+		},
+		WriteRequest: structs.WriteRequest{Token: "root"},
+	}
+	if err := client.Call("ACL.Apply", &arg2, nil); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Resolve again
+	acl, err = s2.aclCache.lookupACL(id, "dc1")
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Should still deny due to warm cache
+	if acl.KeyRead("") {
+		t.Fatalf("should deny")
+	}
+
+	// Should allow after cache expires
+	testutil.WaitForResult(func() (bool, error) {
+		acl, err = s2.aclCache.lookupACL(id, "dc1")
+		if err != nil {
+			return false, err
+		}
+		if !acl.KeyRead("") {
+			return false, fmt.Errorf("should allow")
+		}
+		return true, nil
+	}, func(err error) {
+		t.Fatalf("err: %s", err)
+	})
 }
 
 var testACLPolicy = `
